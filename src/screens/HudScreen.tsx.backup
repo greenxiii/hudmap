@@ -1,0 +1,11 @@
+/**
+ * HUD Screen - Circular minimap navigation display
+ * Renders roads, route, and player position using react-native-skia
+ * 
+ * BACKUP - This is the original version with Skia
+ * Restore this file when react-native-skia is working
+ */
+
+
+
+
