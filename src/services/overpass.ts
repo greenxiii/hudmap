@@ -37,8 +37,10 @@ export async function fetchNearbyRoads(
     const distance = distanceBetween(cache.center, center);
     const age = Date.now() - cache.timestamp;
 
+    // Always return cached roads - they'll be re-projected relative to current position
+    // Only re-fetch if user moved significantly (to get new roads in new area)
     if (distance < MIN_DISTANCE_M && age < FETCH_INTERVAL_MS) {
-      // Transform cached roads to new center if needed
+      // Roads are in world coordinates, will be re-projected in render
       return cache.roads;
     }
   }

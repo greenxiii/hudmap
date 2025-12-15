@@ -36,6 +36,38 @@ const ROTATION_DURATION_MS = 25; // Animation duration - smooth interpolation be
 const HEADING_DEBOUNCE_MS = 1; // Lower = more responsive (try 0-16ms for instant, 16-50ms for smooth)
 const HEADING_CHANGE_THRESHOLD = 3; // Ignore heading changes smaller than this (degrees) - reduces unnecessary calculations
 
+// ============================================================================
+// VISUAL STYLE CONSTANTS - Customize colors, sizes, and appearance here
+// ============================================================================
+
+// Route styling
+const ROUTE_COLOR = '#2a64a4'; // Green route line
+const ROUTE_STROKE_WIDTH = 10; // Route line thickness
+
+// Road styling
+const ROAD_COLOR = '#949493'; // White road lines
+const ROAD_STROKE_WIDTH = 10; // Road line thickness
+
+// Player marker styling
+const PLAYER_MARKER_COLOR = '#31ce30'; // White triangle
+const PLAYER_MARKER_CENTER_COLOR = '#31ce30'; // Red center dot
+const PLAYER_MARKER_SIZE = 10; // Triangle size in pixels
+const PLAYER_MARKER_CENTER_RADIUS = PLAYER_MARKER_SIZE * 0.5; // Center dot radius
+
+// HUD container styling
+const HUD_BORDER_COLOR = '#4a4f50'; // Border color around HUD circle
+const HUD_BORDER_WIDTH = 12; // Border thickness
+
+// North arrow styling
+const NORTH_ARROW_COLOR = '#FF8C00'; // Orange color for north arrow
+const NORTH_ARROW_SIZE = 16; // Size of the arrow triangle
+const NORTH_ARROW_BASE_DISTANCE = HUD_RADIUS - 12; // Distance from center to arrow base (on border edge)
+
+// Background color
+const BACKGROUND_COLOR = '#272b27'; // Black background
+
+// ============================================================================
+
 interface HudScreenProps {
   destinationUrl?: string; // Optional URL passed from share extension
   destination?: LatLng; // Optional destination coordinates (alternative to URL)
@@ -62,6 +94,9 @@ export default function HudScreen({
 
   // Track last destination to avoid rebuilding route unnecessarily
   const lastDestinationRef = useRef<LatLng | null>(null);
+  
+  // Track HUD container position for arrow alignment
+  const [hudPosition, setHudPosition] = useState<{x: number; y: number} | null>(null);
 
   // Handle URL input submission
   const handleUrlSubmit = useCallback(async () => {
@@ -399,16 +434,18 @@ export default function HudScreen({
         <Path
           key={`road-${index}`}
           path={path}
-          color="#FFFFFF"
+          color={ROAD_COLOR}
           style="stroke"
-          strokeWidth={2}
+          strokeWidth={ROAD_STROKE_WIDTH}
+          strokeJoin="round"
+          strokeCap="round"
         />
       );
     });
 
     const validPaths = paths.filter(p => p !== null);
     return validPaths;
-  }, [roads, location]);
+  }, [roads, location?.position.lat, location?.position.lng]); // Re-render when position changes
 
   // Render route as a thick highlighted path (no rotation - handled by Animated.View)
   // Route points are static world coordinates, only projected relative to current position
@@ -448,9 +485,11 @@ export default function HudScreen({
     return (
       <Path
         path={path}
-        color="#00FF00"
+        color={ROUTE_COLOR}
         style="stroke"
-        strokeWidth={4}
+        strokeWidth={ROUTE_STROKE_WIDTH}
+        strokeJoin="round"
+        strokeCap="round"
       />
     );
   }, [route, location?.position.lat, location?.position.lng]); // Only depend on position, not heading
@@ -459,22 +498,74 @@ export default function HudScreen({
   const renderPlayerMarker = useCallback(() => {
     const centerX = HUD_RADIUS;
     const centerY = HUD_RADIUS;
-    const triangleSize = 12;
 
     const path = Skia.Path.Make();
     // Triangle pointing up (north)
-    path.moveTo(centerX, centerY - triangleSize);
-    path.lineTo(centerX - triangleSize * 0.866, centerY + triangleSize * 0.5);
-    path.lineTo(centerX + triangleSize * 0.866, centerY + triangleSize * 0.5);
+    path.moveTo(centerX, centerY - PLAYER_MARKER_SIZE);
+    path.lineTo(centerX - PLAYER_MARKER_SIZE * 0.866, centerY + PLAYER_MARKER_SIZE * 0.5);
+    path.lineTo(centerX + PLAYER_MARKER_SIZE * 0.866, centerY + PLAYER_MARKER_SIZE * 0.5);
     path.close();
 
     return (
       <Group>
-        <Circle cx={centerX} cy={centerY} r={triangleSize * 0.5} color="#FF0000" />
-        <Path path={path} color="#FFFFFF" style="fill" />
+        <Circle
+          cx={centerX}
+          cy={centerY}
+          r={PLAYER_MARKER_CENTER_RADIUS}
+          color={PLAYER_MARKER_CENTER_COLOR}
+        />
+        <Path path={path} color={PLAYER_MARKER_COLOR} style="fill" />
       </Group>
     );
   }, []);
+
+  // Render north arrow (rotates with map to always point north)
+  const renderNorthArrow = useCallback(() => {
+    if (!location) return null;
+    
+    const centerX = HUD_RADIUS;
+    const centerY = HUD_RADIUS;
+    
+    // Start with arrow at top of circle (north position)
+    // Arrow base sits exactly on the border edge
+    // centerY is HUD_RADIUS, so border is at y = 0 (top of canvas)
+    const arrowBaseX = centerX; // Centered horizontally
+    const arrowBaseY = 0; // At top border (north) - exactly on the circle edge
+
+    // Rotate arrow position by heading so it always points north
+    // Map rotates by -heading (displayRotation), so arrow needs to rotate by +heading to stay pointing north
+    // displayRotation is -heading, so we use -displayRotation to get heading
+    const currentHeading = -displayRotation;
+    const headingRad = (currentHeading * Math.PI) / 180;
+    const cos = Math.cos(headingRad);
+    const sin = Math.sin(headingRad);
+    
+    // Rotate the arrow base position around the center
+    // Start at top (north): dx=0, dy=-NORTH_ARROW_BASE_DISTANCE
+    const dx = 0;
+    const dy = -NORTH_ARROW_BASE_DISTANCE;
+    const rotatedBaseX = centerX + dx * cos - dy * sin;
+    const rotatedBaseY = centerY + dx * sin + dy * cos;
+
+    const path = Skia.Path.Make();
+    // Triangle pointing up (north)
+    // Tip extends outward from border, base sits on border
+    const tipX = rotatedBaseX;
+    const tipY = rotatedBaseY - NORTH_ARROW_SIZE; // Tip extends outward
+    const baseLeftX = rotatedBaseX - NORTH_ARROW_SIZE * 0.866;
+    const baseLeftY = rotatedBaseY;
+    const baseRightX = rotatedBaseX + NORTH_ARROW_SIZE * 0.866;
+    const baseRightY = rotatedBaseY;
+    
+    path.moveTo(tipX, tipY);
+    path.lineTo(baseLeftX, baseLeftY);
+    path.lineTo(baseRightX, baseRightY);
+    path.close();
+
+    return (
+      <Path path={path} color={NORTH_ARROW_COLOR} style="fill" />
+    );
+  }, [displayRotation]);
 
   if (error) {
     return (
@@ -528,7 +619,12 @@ export default function HudScreen({
         )}
       </View>
 
-      <View style={styles.hudContainer}>
+      <View
+        style={styles.hudContainer}
+        onLayout={(event) => {
+          const {x, y} = event.nativeEvent.layout;
+          setHudPosition({x, y});
+        }}>
         {/* Rotating map layer */}
         <Animated.View
           style={{
@@ -574,6 +670,26 @@ export default function HudScreen({
           </Group>
         </Canvas>
       </View>
+      {/* North arrow layer - rendered outside hudContainer so it's above the border */}
+      {/* Position arrow Canvas to exactly match hudContainer position */}
+      {hudPosition && (
+        <View
+          style={{
+            position: 'absolute',
+            width: HUD_SIZE,
+            height: HUD_SIZE,
+            left: hudPosition.x,
+            top: hudPosition.y,
+            zIndex: 20,
+            pointerEvents: 'none',
+          }}>
+          <Canvas style={styles.canvas}>
+            <Group>
+              {renderNorthArrow()}
+            </Group>
+          </Canvas>
+        </View>
+      )}
       <View style={styles.infoContainer}>
         <Text style={styles.turnText}>{nextTurn}</Text>
         <Text style={styles.distanceText}>
@@ -594,7 +710,7 @@ export default function HudScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: BACKGROUND_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -603,8 +719,8 @@ const styles = StyleSheet.create({
     height: HUD_SIZE,
     borderRadius: HUD_RADIUS,
     overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: '#333333',
+    borderWidth: HUD_BORDER_WIDTH,
+    borderColor: HUD_BORDER_COLOR,
   },
   canvas: {
     width: HUD_SIZE,
