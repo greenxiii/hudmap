@@ -49,10 +49,10 @@ const ROAD_COLOR = '#949493'; // White road lines
 const ROAD_STROKE_WIDTH = 10; // Road line thickness
 
 // Player marker styling
-const PLAYER_MARKER_COLOR = '#31ce30'; // White triangle
-const PLAYER_MARKER_CENTER_COLOR = '#31ce30'; // Red center dot
-const PLAYER_MARKER_SIZE = 10; // Triangle size in pixels
-const PLAYER_MARKER_CENTER_RADIUS = PLAYER_MARKER_SIZE * 0.5; // Center dot radius
+const PLAYER_MARKER_COLOR = '#31ce30'; // Green triangle
+const PLAYER_MARKER_BORDER_COLOR = '#000000'; // Black border color for player marker
+const PLAYER_MARKER_BORDER_WIDTH = 2; // Border width for player marker
+const PLAYER_MARKER_SIZE = 13; // Triangle size in pixels
 
 // HUD container styling
 const HUD_BORDER_COLOR = '#4a4f50'; // Border color around HUD circle
@@ -413,11 +413,13 @@ export default function HudScreen({
       let isFirst = true;
       let hasPoints = false;
 
+      const centerOffset = -HUD_BORDER_WIDTH / 2;
+      
       road.points.forEach(point => {
         const local = projectToLocalMeters(point, location.position);
         // No rotation here - handled by Animated.View transform
-        const x = HUD_RADIUS + local.x * PIXELS_PER_METER;
-        const y = HUD_RADIUS + local.y * PIXELS_PER_METER;
+        const x = HUD_RADIUS + centerOffset + local.x * PIXELS_PER_METER;
+        const y = HUD_RADIUS + centerOffset + local.y * PIXELS_PER_METER;
 
         if (isFirst) {
           path.moveTo(x, y);
@@ -460,16 +462,20 @@ export default function HudScreen({
     let isFirst = true;
 
     // Render all route points - they're static world coordinates
+    const centerOffset = -HUD_BORDER_WIDTH / 2;
+    const visualCenterX = HUD_RADIUS + centerOffset;
+    const visualCenterY = HUD_RADIUS + centerOffset;
+
     route.points.forEach((point) => {
       // Project each route point to local meters relative to current position
       const local = projectToLocalMeters(point, location.position);
       // No rotation here - handled by Animated.View transform
-      const x = HUD_RADIUS + local.x * PIXELS_PER_METER;
-      const y = HUD_RADIUS + local.y * PIXELS_PER_METER;
+      const x = visualCenterX + local.x * PIXELS_PER_METER;
+      const y = visualCenterY + local.y * PIXELS_PER_METER;
 
       // Skip points that are way outside the view (optional optimization)
       const distanceFromCenter = Math.sqrt(
-        Math.pow(x - HUD_RADIUS, 2) + Math.pow(y - HUD_RADIUS, 2),
+        Math.pow(x - visualCenterX, 2) + Math.pow(y - visualCenterY, 2),
       );
       if (distanceFromCenter > HUD_RADIUS * 1.5) {
         // Point is way outside visible area, skip it
@@ -496,27 +502,42 @@ export default function HudScreen({
     );
   }, [route, location?.position.lat, location?.position.lng]); // Only depend on position, not heading
 
-  // Render player marker (triangle at center)
   const renderPlayerMarker = useCallback(() => {
-    const centerX = HUD_RADIUS;
-    const centerY = HUD_RADIUS;
+    const borderOffset = HUD_BORDER_WIDTH / 2;
+    const centerX = HUD_RADIUS - borderOffset;
+    const centerY = HUD_RADIUS - borderOffset;
+
+    const triangleLength = PLAYER_MARKER_SIZE * 1.5;
+    const triangleWidth = PLAYER_MARKER_SIZE;
+    const halfWidth = triangleWidth / 2;
+    const tipY = centerY - triangleLength;
+    const baseY = centerY;
 
     const path = Skia.Path.Make();
-    // Triangle pointing up (north)
-    path.moveTo(centerX, centerY - PLAYER_MARKER_SIZE);
-    path.lineTo(centerX - PLAYER_MARKER_SIZE * 0.866, centerY + PLAYER_MARKER_SIZE * 0.5);
-    path.lineTo(centerX + PLAYER_MARKER_SIZE * 0.866, centerY + PLAYER_MARKER_SIZE * 0.5);
+    path.moveTo(centerX, tipY);
+    path.lineTo(centerX - halfWidth, baseY);
+    path.lineTo(centerX + halfWidth, baseY);
     path.close();
 
     return (
       <Group>
-        <Circle
-          cx={centerX}
-          cy={centerY}
-          r={PLAYER_MARKER_CENTER_RADIUS}
-          color={PLAYER_MARKER_CENTER_COLOR}
+        {/* Fill triangle first (background) */}
+        <Path 
+          path={path} 
+          color={PLAYER_MARKER_COLOR} 
+          style="fill"
+          opacity={1}
         />
-        <Path path={path} color={PLAYER_MARKER_COLOR} style="fill" />
+        {/* Then draw border on top */}
+        <Path 
+          path={path} 
+          color={PLAYER_MARKER_BORDER_COLOR} 
+          style="stroke" 
+          strokeWidth={PLAYER_MARKER_BORDER_WIDTH}
+          strokeJoin="miter"
+          strokeCap="butt"
+          opacity={1}
+        />
       </Group>
     );
   }, []);
