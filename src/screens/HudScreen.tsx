@@ -24,6 +24,7 @@ import {
 } from '../services/location';
 import {fetchNearbyRoads} from '../services/overpass';
 import {buildRoute, extractDestinationFromUrl, resetOsrmAvailability, clearRouteCache} from '../services/routing';
+import {defaultTheme} from '../themes';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 const HUD_SIZE = Math.min(SCREEN_WIDTH, SCREEN_HEIGHT) * 0.9;
@@ -36,39 +37,8 @@ const ROTATION_DURATION_MS = 25; // Animation duration - smooth interpolation be
 const HEADING_DEBOUNCE_MS = 1; // Lower = more responsive (try 0-16ms for instant, 16-50ms for smooth)
 const HEADING_CHANGE_THRESHOLD = 3; // Ignore heading changes smaller than this (degrees) - reduces unnecessary calculations
 
-// ============================================================================
-// VISUAL STYLE CONSTANTS - Customize colors, sizes, and appearance here
-// ============================================================================
-
-// Route styling
-const ROUTE_COLOR = '#2a64a4'; // Green route line
-const ROUTE_STROKE_WIDTH = 10; // Route line thickness
-
-// Road styling
-const ROAD_COLOR = '#949493'; // White road lines
-const ROAD_STROKE_WIDTH = 10; // Road line thickness
-
-// Player marker styling
-const PLAYER_MARKER_COLOR = '#31ce30'; // Green triangle
-const PLAYER_MARKER_BORDER_COLOR = '#000000'; // Black border color for player marker
-const PLAYER_MARKER_BORDER_WIDTH = 2; // Border width for player marker
-const PLAYER_MARKER_SIZE = 13; // Triangle size in pixels
-
-// HUD container styling
-const HUD_BORDER_COLOR = '#4a4f50'; // Border color around HUD circle
-const HUD_BORDER_WIDTH = 20; // Border thickness
-
-// North arrow styling
-const NORTH_ARROW_COLOR = '#50381f'; // Orange color for north arrow
-const NORTH_ARROW_BORDER_COLOR = '#97632f'; // Black border color for north arrow
-const NORTH_ARROW_BORDER_WIDTH = 2; // Border width for north arrow
-const NORTH_ARROW_SIZE = 18; // Size of the arrow triangle
-const NORTH_ARROW_BASE_DISTANCE = HUD_RADIUS - 19; // Distance from center to arrow base (on border edge)
-
-// Background color
-const BACKGROUND_COLOR = '#272b27'; // Black background
-
-// ============================================================================
+// Theme - can be switched to different themes
+const theme = defaultTheme;
 
 interface HudScreenProps {
   destinationUrl?: string; // Optional URL passed from share extension
@@ -413,7 +383,7 @@ export default function HudScreen({
       let isFirst = true;
       let hasPoints = false;
 
-      const centerOffset = -HUD_BORDER_WIDTH / 2;
+      const centerOffset = -theme.hudBorderWidth / 2;
       
       road.points.forEach(point => {
         const local = projectToLocalMeters(point, location.position);
@@ -438,9 +408,9 @@ export default function HudScreen({
         <Path
           key={`road-${index}`}
           path={path}
-          color={ROAD_COLOR}
+          color={theme.roadColor}
           style="stroke"
-          strokeWidth={ROAD_STROKE_WIDTH}
+          strokeWidth={theme.roadStrokeWidth}
           strokeJoin="round"
           strokeCap="round"
         />
@@ -462,7 +432,7 @@ export default function HudScreen({
     let isFirst = true;
 
     // Render all route points - they're static world coordinates
-    const centerOffset = -HUD_BORDER_WIDTH / 2;
+    const centerOffset = -theme.hudBorderWidth / 2;
     const visualCenterX = HUD_RADIUS + centerOffset;
     const visualCenterY = HUD_RADIUS + centerOffset;
 
@@ -493,9 +463,9 @@ export default function HudScreen({
     return (
       <Path
         path={path}
-        color={ROUTE_COLOR}
+        color={theme.routeColor}
         style="stroke"
-        strokeWidth={ROUTE_STROKE_WIDTH}
+        strokeWidth={theme.routeStrokeWidth}
         strokeJoin="round"
         strokeCap="round"
       />
@@ -503,12 +473,12 @@ export default function HudScreen({
   }, [route, location?.position.lat, location?.position.lng]); // Only depend on position, not heading
 
   const renderPlayerMarker = useCallback(() => {
-    const borderOffset = HUD_BORDER_WIDTH / 2;
+    const borderOffset = theme.hudBorderWidth / 2;
     const centerX = HUD_RADIUS - borderOffset;
     const centerY = HUD_RADIUS - borderOffset;
 
-    const triangleLength = PLAYER_MARKER_SIZE * 1.5;
-    const triangleWidth = PLAYER_MARKER_SIZE;
+    const triangleLength = theme.playerMarkerSize * 1.5;
+    const triangleWidth = theme.playerMarkerSize;
     const halfWidth = triangleWidth / 2;
     const tipY = centerY - triangleLength;
     const baseY = centerY;
@@ -524,16 +494,16 @@ export default function HudScreen({
         {/* Fill triangle first (background) */}
         <Path 
           path={path} 
-          color={PLAYER_MARKER_COLOR} 
+          color={theme.playerMarkerColor} 
           style="fill"
           opacity={1}
         />
         {/* Then draw border on top */}
         <Path 
           path={path} 
-          color={PLAYER_MARKER_BORDER_COLOR} 
+          color={theme.playerMarkerBorderColor} 
           style="stroke" 
-          strokeWidth={PLAYER_MARKER_BORDER_WIDTH}
+          strokeWidth={theme.playerMarkerBorderWidth}
           strokeJoin="miter"
           strokeCap="butt"
           opacity={1}
@@ -559,18 +529,19 @@ export default function HudScreen({
     const sin = Math.sin(headingRad);
     
     // Rotate the arrow base position around the center
-    // Start at top (north): dx=0, dy=-NORTH_ARROW_BASE_DISTANCE
+    const northArrowBaseDistance = theme.northArrowBaseDistance(HUD_RADIUS);
+    // Start at top (north): dx=0, dy=-northArrowBaseDistance
     const dx = 0;
-    const dy = -NORTH_ARROW_BASE_DISTANCE;
+    const dy = -northArrowBaseDistance;
     const rotatedBaseX = centerX + dx * cos - dy * sin;
     const rotatedBaseY = centerY + dx * sin + dy * cos;
 
     // Create triangle in local coordinates (pointing outward from center)
     // The tip extends outward from the border, the base sits on the border
-    // In local coords: tip at (0, -NORTH_ARROW_SIZE) pointing outward, base at y=0
-    const triangleWidth = NORTH_ARROW_SIZE * 0.866 * 2; // Base width of equilateral triangle
+    // In local coords: tip at (0, -northArrowSize) pointing outward, base at y=0
+    const triangleWidth = theme.northArrowSize * 0.866 * 2; // Base width of equilateral triangle
     const localTipX = 0;
-    const localTipY = -NORTH_ARROW_SIZE; // Tip extends outward (negative Y = up/outward in screen coords)
+    const localTipY = -theme.northArrowSize; // Tip extends outward (negative Y = up/outward in screen coords)
     const localBaseLeftX = -triangleWidth / 2;
     const localBaseLeftY = 0;
     const localBaseRightX = triangleWidth / 2;
@@ -605,14 +576,14 @@ export default function HudScreen({
       <>
         <Path 
           path={path} 
-          color={NORTH_ARROW_COLOR} 
+          color={theme.northArrowColor} 
           style="fill" 
         />
         <Path 
           path={path} 
-          color={NORTH_ARROW_BORDER_COLOR} 
+          color={theme.northArrowBorderColor} 
           style="stroke" 
-          strokeWidth={NORTH_ARROW_BORDER_WIDTH}
+          strokeWidth={theme.northArrowBorderWidth}
           strokeJoin="miter"
           strokeCap="butt"
         />
@@ -763,7 +734,7 @@ export default function HudScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: BACKGROUND_COLOR,
+    backgroundColor: theme.backgroundColor,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -772,8 +743,8 @@ const styles = StyleSheet.create({
     height: HUD_SIZE,
     borderRadius: HUD_RADIUS,
     overflow: 'hidden',
-    borderWidth: HUD_BORDER_WIDTH,
-    borderColor: HUD_BORDER_COLOR,
+    borderWidth: theme.hudBorderWidth,
+    borderColor: theme.hudBorderColor,
   },
   canvas: {
     width: HUD_SIZE,
