@@ -56,12 +56,14 @@ const PLAYER_MARKER_CENTER_RADIUS = PLAYER_MARKER_SIZE * 0.5; // Center dot radi
 
 // HUD container styling
 const HUD_BORDER_COLOR = '#4a4f50'; // Border color around HUD circle
-const HUD_BORDER_WIDTH = 12; // Border thickness
+const HUD_BORDER_WIDTH = 20; // Border thickness
 
 // North arrow styling
-const NORTH_ARROW_COLOR = '#FF8C00'; // Orange color for north arrow
-const NORTH_ARROW_SIZE = 16; // Size of the arrow triangle
-const NORTH_ARROW_BASE_DISTANCE = HUD_RADIUS - 12; // Distance from center to arrow base (on border edge)
+const NORTH_ARROW_COLOR = '#50381f'; // Orange color for north arrow
+const NORTH_ARROW_BORDER_COLOR = '#97632f'; // Black border color for north arrow
+const NORTH_ARROW_BORDER_WIDTH = 2; // Border width for north arrow
+const NORTH_ARROW_SIZE = 18; // Size of the arrow triangle
+const NORTH_ARROW_BASE_DISTANCE = HUD_RADIUS - 19; // Distance from center to arrow base (on border edge)
 
 // Background color
 const BACKGROUND_COLOR = '#272b27'; // Black background
@@ -525,17 +527,12 @@ export default function HudScreen({
     
     const centerX = HUD_RADIUS;
     const centerY = HUD_RADIUS;
-    
-    // Start with arrow at top of circle (north position)
-    // Arrow base sits exactly on the border edge
-    // centerY is HUD_RADIUS, so border is at y = 0 (top of canvas)
-    const arrowBaseX = centerX; // Centered horizontally
-    const arrowBaseY = 0; // At top border (north) - exactly on the circle edge
 
     // Rotate arrow position by heading so it always points north
     // Map rotates by -heading (displayRotation), so arrow needs to rotate by +heading to stay pointing north
     // displayRotation is -heading, so we use -displayRotation to get heading
-    const currentHeading = -displayRotation;
+    // Negate to reverse rotation direction
+    const currentHeading = displayRotation;
     const headingRad = (currentHeading * Math.PI) / 180;
     const cos = Math.cos(headingRad);
     const sin = Math.sin(headingRad);
@@ -547,23 +544,58 @@ export default function HudScreen({
     const rotatedBaseX = centerX + dx * cos - dy * sin;
     const rotatedBaseY = centerY + dx * sin + dy * cos;
 
+    // Create triangle in local coordinates (pointing outward from center)
+    // The tip extends outward from the border, the base sits on the border
+    // In local coords: tip at (0, -NORTH_ARROW_SIZE) pointing outward, base at y=0
+    const triangleWidth = NORTH_ARROW_SIZE * 0.866 * 2; // Base width of equilateral triangle
+    const localTipX = 0;
+    const localTipY = -NORTH_ARROW_SIZE; // Tip extends outward (negative Y = up/outward in screen coords)
+    const localBaseLeftX = -triangleWidth / 2;
+    const localBaseLeftY = 0;
+    const localBaseRightX = triangleWidth / 2;
+    const localBaseRightY = 0;
+
+    // Rotate the triangle shape itself so it points in the direction from center to arrow position
+    // The triangle rotates by the same angle as the arrow position rotates around the circle
+    // This makes the triangle always point outward from the center, in the direction of north
+    const rotateCos = cos;
+    const rotateSin = sin;
+
+    // Rotate each point of the triangle around the arrow base position
+    // Rotate tip (extends outward from border)
+    const rotatedTipX = rotatedBaseX + (localTipX * rotateCos - localTipY * rotateSin);
+    const rotatedTipY = rotatedBaseY + (localTipX * rotateSin + localTipY * rotateCos);
+
+    // Rotate base left corner
+    const rotatedBaseLeftX = rotatedBaseX + (localBaseLeftX * rotateCos - localBaseLeftY * rotateSin);
+    const rotatedBaseLeftY = rotatedBaseY + (localBaseLeftX * rotateSin + localBaseLeftY * rotateCos);
+
+    // Rotate base right corner
+    const rotatedBaseRightX = rotatedBaseX + (localBaseRightX * rotateCos - localBaseRightY * rotateSin);
+    const rotatedBaseRightY = rotatedBaseY + (localBaseRightX * rotateSin + localBaseRightY * rotateCos);
+
     const path = Skia.Path.Make();
-    // Triangle pointing up (north)
-    // Tip extends outward from border, base sits on border
-    const tipX = rotatedBaseX;
-    const tipY = rotatedBaseY - NORTH_ARROW_SIZE; // Tip extends outward
-    const baseLeftX = rotatedBaseX - NORTH_ARROW_SIZE * 0.866;
-    const baseLeftY = rotatedBaseY;
-    const baseRightX = rotatedBaseX + NORTH_ARROW_SIZE * 0.866;
-    const baseRightY = rotatedBaseY;
-    
-    path.moveTo(tipX, tipY);
-    path.lineTo(baseLeftX, baseLeftY);
-    path.lineTo(baseRightX, baseRightY);
+    path.moveTo(rotatedTipX, rotatedTipY);
+    path.lineTo(rotatedBaseLeftX, rotatedBaseLeftY);
+    path.lineTo(rotatedBaseRightX, rotatedBaseRightY);
     path.close();
 
     return (
-      <Path path={path} color={NORTH_ARROW_COLOR} style="fill" />
+      <>
+        <Path 
+          path={path} 
+          color={NORTH_ARROW_COLOR} 
+          style="fill" 
+        />
+        <Path 
+          path={path} 
+          color={NORTH_ARROW_BORDER_COLOR} 
+          style="stroke" 
+          strokeWidth={NORTH_ARROW_BORDER_WIDTH}
+          strokeJoin="miter"
+          strokeCap="butt"
+        />
+      </>
     );
   }, [displayRotation]);
 
