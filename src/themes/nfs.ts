@@ -22,7 +22,7 @@ export const nfsTheme: Theme = {
 
   // HUD container styling
   hudBorderColor: '#4a4f50',
-  hudBorderWidth: 20,
+  hudBorderWidth: 18,
 
   // North arrow styling
   northArrowColor: '#50381f',
