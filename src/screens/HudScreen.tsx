@@ -4,7 +4,7 @@
  */
 
 import React, {useEffect, useState, useCallback, useRef} from 'react';
-import {View, StyleSheet, Text, Dimensions, StatusBar, Animated, Easing, TextInput, TouchableOpacity} from 'react-native';
+import {View, StyleSheet, Text, Dimensions, StatusBar, Animated, Easing, TextInput, TouchableOpacity, PanResponder} from 'react-native';
 import {
   Canvas,
   Path,
@@ -28,8 +28,9 @@ import {defaultTheme} from '../themes';
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 const HUD_SIZE = Math.min(SCREEN_WIDTH, SCREEN_HEIGHT) * 0.9;
 const HUD_RADIUS = HUD_SIZE / 2;
-const VIEW_RADIUS_M = 200; // 200 meter radius view - good balance between detail and coverage
-const PIXELS_PER_METER = HUD_RADIUS / VIEW_RADIUS_M;
+const MIN_VIEW_RADIUS_M = 50;
+const MAX_VIEW_RADIUS_M = 1000;
+const DEFAULT_VIEW_RADIUS_M = 200;
 
 // Rotation animation settings
 const ROTATION_DURATION_MS = 100; // Longer duration for smoother gliding
@@ -55,6 +56,42 @@ export default function HudScreen({
   const [error, setError] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState<string>('');
   const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
+  const [viewRadius, setViewRadius] = useState(DEFAULT_VIEW_RADIUS_M);
+  const pixelsPerMeter = HUD_RADIUS / viewRadius;
+
+  // Zoom handling
+  const lastPinchDistanceRef = useRef<number | null>(null);
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (evt) => {
+        if (evt.nativeEvent.touches.length === 2) {
+          const touches = evt.nativeEvent.touches;
+          const dx = touches[0].pageX - touches[1].pageX;
+          const dy = touches[0].pageY - touches[1].pageY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (lastPinchDistanceRef.current !== null) {
+            const diff = lastPinchDistanceRef.current - distance;
+            // Sensitivity decreases as radius increases to keep zoom feeling consistent
+            const sensitivity = viewRadius / 150; 
+            setViewRadius((prev) => {
+              const next = prev + diff * sensitivity;
+              return Math.max(MIN_VIEW_RADIUS_M, Math.min(next, MAX_VIEW_RADIUS_M));
+            });
+          }
+          lastPinchDistanceRef.current = distance;
+        }
+      },
+      onPanResponderRelease: () => {
+        lastPinchDistanceRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        lastPinchDistanceRef.current = null;
+      },
+    }),
+  ).current;
 
   // Native rotation animation (much faster - uses GPU/compositor)
   const rotationAnim = useRef(new Animated.Value(0)).current;
@@ -269,7 +306,7 @@ export default function HudScreen({
         const fetchedRoads = await fetchNearbyRoads(
           location.position.lat,
           location.position.lng,
-          VIEW_RADIUS_M,
+          viewRadius,
         );
         if (mounted) {
           setRoads(fetchedRoads);
@@ -280,7 +317,7 @@ export default function HudScreen({
     };
 
     fetchRoads();
-  }, [location?.position.lat, location?.position.lng]);
+  }, [location?.position.lat, location?.position.lng, viewRadius]);
 
   // Update next turn info from route
   useEffect(() => {
@@ -434,8 +471,8 @@ export default function HudScreen({
       road.points.forEach(point => {
         const local = projectToLocalMeters(point, location.position);
         // No rotation here - handled by Animated.View transform
-        const x = visualCenterX + local.x * PIXELS_PER_METER;
-        const y = visualCenterY + local.y * PIXELS_PER_METER;
+        const x = visualCenterX + local.x * pixelsPerMeter;
+        const y = visualCenterY + local.y * pixelsPerMeter;
 
         if (isFirst) {
           path.moveTo(x, y);
@@ -467,7 +504,7 @@ export default function HudScreen({
 
     const validPaths = paths.filter(p => p !== null);
     return validPaths;
-  }, [roads, location?.position.lat, location?.position.lng, getRoadStyle, theme]); // Re-render when position changes
+  }, [roads, location?.position.lat, location?.position.lng, getRoadStyle, theme, pixelsPerMeter]); // Re-render when position or zoom changes
 
   // Render route as a thick highlighted path (no rotation - handled by Animated.View)
   // Route points are static world coordinates, only projected relative to current position
@@ -488,8 +525,8 @@ export default function HudScreen({
       // Project each route point to local meters relative to current position
       const local = projectToLocalMeters(point, location.position);
       // No rotation here - handled by Animated.View transform
-      const x = visualCenterX + local.x * PIXELS_PER_METER;
-      const y = visualCenterY + local.y * PIXELS_PER_METER;
+      const x = visualCenterX + local.x * pixelsPerMeter;
+      const y = visualCenterY + local.y * pixelsPerMeter;
 
       // Skip points that are way outside the view (optional optimization)
       const distanceFromCenter = Math.sqrt(
@@ -518,7 +555,7 @@ export default function HudScreen({
         strokeCap="round"
       />
     );
-  }, [route, location?.position.lat, location?.position.lng]); // Only depend on position, not heading
+  }, [route, location?.position.lat, location?.position.lng, pixelsPerMeter]); // Only depend on position and zoom, not heading
 
   const renderPlayerMarker = useCallback(() => {
     // Center at absolute HUD center
@@ -778,6 +815,7 @@ export default function HudScreen({
 
       <View
         style={styles.hudContainer}
+        {...panResponder.panHandlers}
         onLayout={(event) => {
           const {x, y} = event.nativeEvent.layout;
           setHudPosition({x, y});

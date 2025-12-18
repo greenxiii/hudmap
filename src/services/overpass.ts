@@ -13,6 +13,7 @@ const MIN_DISTANCE_M = 150; // 150 meters
 interface CacheEntry {
   roads: RoadSegment[];
   center: LatLng;
+  radiusM: number;
   timestamp: number;
 }
 
@@ -37,19 +38,24 @@ export async function fetchNearbyRoads(
     const distance = distanceBetween(cache.center, center);
     const age = Date.now() - cache.timestamp;
 
-    // Always return cached roads - they'll be re-projected relative to current position
-    // Only re-fetch if user moved significantly (to get new roads in new area)
-    if (distance < MIN_DISTANCE_M && age < FETCH_INTERVAL_MS) {
+    // Only re-fetch if:
+    // 1. User moved significantly
+    // 2. Requested radius is larger than cached radius (need more coverage)
+    // 3. Cache is old
+    if (distance < MIN_DISTANCE_M && radiusM <= cache.radiusM && age < FETCH_INTERVAL_MS) {
       // Roads are in world coordinates, will be re-projected in render
       return cache.roads;
     }
   }
 
   try {
-    const roads = await fetchRoadsFromOverpass(lat, lng, radiusM);
+    // Fetch with a bit more radius than requested to reduce re-fetching during small zooms
+    const fetchRadius = Math.max(radiusM, 400); 
+    const roads = await fetchRoadsFromOverpass(lat, lng, fetchRadius);
     cache = {
       roads,
       center,
+      radiusM: fetchRadius,
       timestamp: Date.now(),
     };
     return roads;
