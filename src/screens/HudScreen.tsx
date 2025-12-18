@@ -13,12 +13,11 @@ import {
   Circle,
 } from '@shopify/react-native-skia';
 import {LocationData, LatLng, RoadSegment, Route} from '../models/types';
-import {projectToLocalMeters, rotatePoint} from '../utils/geo';
+import {projectToLocalMeters} from '../utils/geo';
 import {
   startLocationUpdates,
   stopLocationUpdates,
   requestLocationPermission,
-  getCurrentLocation,
   getCurrentPosition,
   setHeadingDebounce,
 } from '../services/location';
@@ -52,8 +51,7 @@ export default function HudScreen({
   const [location, setLocation] = useState<LocationData | null>(null);
   const [roads, setRoads] = useState<RoadSegment[]>([]);
   const [route, setRoute] = useState<Route | null>(null);
-  const [nextTurn, setNextTurn] = useState<string>('No route');
-  const [distanceToTurn, setDistanceToTurn] = useState<number>(0);
+  const [nextManeuver, setNextManeuver] = useState<{instruction: string; distance: number} | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState<string>('');
   const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
@@ -287,12 +285,13 @@ export default function HudScreen({
   // Update next turn info from route
   useEffect(() => {
     if (route && route.maneuvers.length > 0) {
-      const nextManeuver = route.maneuvers[0];
-      setNextTurn(nextManeuver.instruction);
-      setDistanceToTurn(nextManeuver.distance);
+      const maneuver = route.maneuvers[0];
+      setNextManeuver({
+        instruction: maneuver.instruction,
+        distance: maneuver.distance,
+      });
     } else {
-      setNextTurn('No route');
-      setDistanceToTurn(0);
+      setNextManeuver(null);
     }
   }, [route]);
 
@@ -372,6 +371,38 @@ export default function HudScreen({
     }).start();
   }, [location?.heading, rotationAnim]);
 
+  // Get road style based on road type (width only, no opacity variation)
+  const getRoadStyle = useCallback((roadType?: string): {width: number} => {
+    const baseWidth = theme.roadStrokeWidth;
+
+    if (!roadType) {
+      return {width: baseWidth * 0.6};
+    }
+
+    switch (roadType) {
+      case 'motorway':
+        return {width: baseWidth * 1.4};
+      case 'trunk':
+        return {width: baseWidth * 1.2};
+      case 'primary':
+        return {width: baseWidth * 1.1};
+      case 'secondary':
+        return {width: baseWidth * 1.0};
+      case 'tertiary':
+        return {width: baseWidth * 0.9};
+      case 'residential':
+        return {width: baseWidth * 0.7};
+      case 'unclassified':
+        return {width: baseWidth * 0.65};
+      case 'service':
+        return {width: baseWidth * 0.5};
+      case 'living_street':
+        return {width: baseWidth * 0.6};
+      default:
+        return {width: baseWidth * 0.6};
+    }
+  }, [theme.roadStrokeWidth]);
+
   // Render roads as paths (no rotation - handled by Animated.View)
   const renderRoads = useCallback(() => {
     if (!location || roads.length === 0) {
@@ -383,13 +414,15 @@ export default function HudScreen({
       let isFirst = true;
       let hasPoints = false;
 
-      const centerOffset = -theme.hudBorderWidth / 2;
+      // Use absolute center to match rotation point
+      const visualCenterX = HUD_RADIUS;
+      const visualCenterY = HUD_RADIUS;
       
       road.points.forEach(point => {
         const local = projectToLocalMeters(point, location.position);
         // No rotation here - handled by Animated.View transform
-        const x = HUD_RADIUS + centerOffset + local.x * PIXELS_PER_METER;
-        const y = HUD_RADIUS + centerOffset + local.y * PIXELS_PER_METER;
+        const x = visualCenterX + local.x * PIXELS_PER_METER;
+        const y = visualCenterY + local.y * PIXELS_PER_METER;
 
         if (isFirst) {
           path.moveTo(x, y);
@@ -404,13 +437,15 @@ export default function HudScreen({
         return null;
       }
 
+      const roadStyle = getRoadStyle(road.type);
+
       return (
         <Path
           key={`road-${index}`}
           path={path}
           color={theme.roadColor}
           style="stroke"
-          strokeWidth={theme.roadStrokeWidth}
+          strokeWidth={roadStyle.width}
           strokeJoin="round"
           strokeCap="round"
         />
@@ -419,7 +454,7 @@ export default function HudScreen({
 
     const validPaths = paths.filter(p => p !== null);
     return validPaths;
-  }, [roads, location?.position.lat, location?.position.lng]); // Re-render when position changes
+  }, [roads, location?.position.lat, location?.position.lng, getRoadStyle, theme]); // Re-render when position changes
 
   // Render route as a thick highlighted path (no rotation - handled by Animated.View)
   // Route points are static world coordinates, only projected relative to current position
@@ -432,9 +467,9 @@ export default function HudScreen({
     let isFirst = true;
 
     // Render all route points - they're static world coordinates
-    const centerOffset = -theme.hudBorderWidth / 2;
-    const visualCenterX = HUD_RADIUS + centerOffset;
-    const visualCenterY = HUD_RADIUS + centerOffset;
+    // Use absolute center to match rotation point
+    const visualCenterX = HUD_RADIUS;
+    const visualCenterY = HUD_RADIUS;
 
     route.points.forEach((point) => {
       // Project each route point to local meters relative to current position
@@ -473,9 +508,9 @@ export default function HudScreen({
   }, [route, location?.position.lat, location?.position.lng]); // Only depend on position, not heading
 
   const renderPlayerMarker = useCallback(() => {
-    const borderOffset = theme.hudBorderWidth / 2;
-    const centerX = HUD_RADIUS - borderOffset;
-    const centerY = HUD_RADIUS - borderOffset;
+    // Center at absolute HUD center
+    const centerX = HUD_RADIUS;
+    const centerY = HUD_RADIUS;
 
     const triangleLength = theme.playerMarkerSize * 1.5;
     const triangleWidth = theme.playerMarkerSize;
@@ -591,6 +626,91 @@ export default function HudScreen({
     );
   }, [displayRotation]);
 
+  // Render turn icon based on maneuver instruction
+  const renderTurnIcon = useCallback(() => {
+    if (!nextManeuver) return null;
+
+    const iconSize = theme.turnIconSize;
+    const canvasSize = iconSize + 20;
+    const centerX = canvasSize / 2; // Center horizontally in canvas
+    const centerY = iconSize / 2 + 10; // Position at top of canvas (bottom of screen)
+
+    const instruction = nextManeuver.instruction.toLowerCase();
+    let path: any = null;
+
+    // Determine icon type from instruction
+    if (instruction.includes('left')) {
+      // Left turn arrow
+      path = Skia.Path.Make();
+      const arrowLength = iconSize * 0.6;
+      const arrowWidth = iconSize * 0.4;
+      // Arrow pointing left
+      path.moveTo(centerX - arrowLength / 2, centerY);
+      path.lineTo(centerX + arrowLength / 2, centerY - arrowWidth / 2);
+      path.lineTo(centerX + arrowLength / 2, centerY + arrowWidth / 2);
+      path.close();
+    } else if (instruction.includes('right')) {
+      // Right turn arrow
+      path = Skia.Path.Make();
+      const arrowLength = iconSize * 0.6;
+      const arrowWidth = iconSize * 0.4;
+      // Arrow pointing right
+      path.moveTo(centerX + arrowLength / 2, centerY);
+      path.lineTo(centerX - arrowLength / 2, centerY - arrowWidth / 2);
+      path.lineTo(centerX - arrowLength / 2, centerY + arrowWidth / 2);
+      path.close();
+    } else if (instruction.includes('straight') || instruction.includes('continue')) {
+      // Straight arrow
+      path = Skia.Path.Make();
+      const arrowLength = iconSize * 0.6;
+      const arrowWidth = iconSize * 0.3;
+      // Arrow pointing up
+      path.moveTo(centerX, centerY - arrowLength / 2);
+      path.lineTo(centerX - arrowWidth / 2, centerY + arrowLength / 2);
+      path.lineTo(centerX + arrowWidth / 2, centerY + arrowLength / 2);
+      path.close();
+    } else if (instruction.includes('arrive')) {
+      // Destination icon (circle)
+      return (
+        <Circle
+          cx={centerX}
+          cy={centerY}
+          r={iconSize * 0.3}
+          color={theme.turnIconColor}
+        />
+      );
+    } else {
+      // Default: straight arrow
+      path = Skia.Path.Make();
+      const arrowLength = iconSize * 0.6;
+      const arrowWidth = iconSize * 0.3;
+      path.moveTo(centerX, centerY - arrowLength / 2);
+      path.lineTo(centerX - arrowWidth / 2, centerY + arrowLength / 2);
+      path.lineTo(centerX + arrowWidth / 2, centerY + arrowLength / 2);
+      path.close();
+    }
+
+    if (!path) return null;
+
+    return (
+      <Group>
+        <Path
+          path={path}
+          color={theme.turnIconColor}
+          style="fill"
+        />
+        <Path
+          path={path}
+          color={theme.turnIconBorderColor}
+          style="stroke"
+          strokeWidth={theme.turnIconBorderWidth}
+          strokeJoin="miter"
+          strokeCap="butt"
+        />
+      </Group>
+    );
+  }, [nextManeuver, theme]);
+
   if (error) {
     return (
       <View style={styles.container}>
@@ -648,85 +768,84 @@ export default function HudScreen({
         onLayout={(event) => {
           const {x, y} = event.nativeEvent.layout;
           setHudPosition({x, y});
-        }}>
-        {/* Rotating map layer */}
-        <Animated.View
-          style={{
-            width: HUD_SIZE,
-            height: HUD_SIZE,
-            transform: [{rotate: `${displayRotation}deg`}],
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            zIndex: 1,
-          }}>
-          <Canvas style={styles.canvas}>
-            <Group>
-              {/* Clip to circle */}
-              <Group
-                clip={Skia.Path.Make().addCircle(
-                  HUD_RADIUS,
-                  HUD_RADIUS,
-                  HUD_RADIUS,
-                )}
-              >
-                {/* Render roads */}
-                {renderRoads()}
-                {/* Render route */}
-                {renderRoute()}
-              </Group>
-            </Group>
-          </Canvas>
-        </Animated.View>
-        {/* Fixed player marker layer (on top, doesn't rotate) */}
-        <Canvas
-          style={[
-            styles.canvas,
-            {
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              zIndex: 10,
-            },
-          ]}>
-          <Group>
-            {renderPlayerMarker()}
-          </Group>
-        </Canvas>
-      </View>
-      {/* North arrow layer - rendered outside hudContainer so it's above the border */}
-      {/* Position arrow Canvas to exactly match hudContainer position */}
+        }}
+      />
+
+      {/* Map, Player, and North Arrow layers - positioned absolutely over the hudContainer */}
       {hudPosition && (
-        <View
-          style={{
-            position: 'absolute',
-            width: HUD_SIZE,
-            height: HUD_SIZE,
-            left: hudPosition.x,
-            top: hudPosition.y,
-            zIndex: 20,
-            pointerEvents: 'none',
-          }}>
-          <Canvas style={styles.canvas}>
+        <>
+          {/* Rotating map layer */}
+          <View
+            style={[
+              styles.layerContainer,
+              {left: hudPosition.x, top: hudPosition.y, zIndex: 1},
+            ]}>
+            <Animated.View
+              style={{
+                width: HUD_SIZE,
+                height: HUD_SIZE,
+                transform: [{rotate: `${displayRotation}deg`}],
+              }}>
+              <Canvas style={styles.canvas}>
+                <Group>
+                  {/* Clip to circle - center at HUD_RADIUS to match outer HUD center */}
+                  <Group
+                    clip={Skia.Path.Make().addCircle(
+                      HUD_RADIUS,
+                      HUD_RADIUS,
+                      HUD_RADIUS - theme.hudBorderWidth,
+                    )}>
+                    {/* Render roads */}
+                    {renderRoads()}
+                    {/* Render route */}
+                    {renderRoute()}
+                  </Group>
+                </Group>
+              </Canvas>
+            </Animated.View>
+          </View>
+
+          {/* Fixed player marker layer (on top, doesn't rotate) */}
+          <View
+            style={[
+              styles.layerContainer,
+              {left: hudPosition.x, top: hudPosition.y, zIndex: 10},
+            ]}>
+            <Canvas style={styles.canvas}>
+              <Group>{renderPlayerMarker()}</Group>
+            </Canvas>
+          </View>
+
+          {/* North arrow layer */}
+          <View
+            style={[
+              styles.layerContainer,
+              {left: hudPosition.x, top: hudPosition.y, zIndex: 20},
+            ]}>
+            <Canvas style={styles.canvas}>
+              <Group>{renderNorthArrow()}</Group>
+            </Canvas>
+          </View>
+        </>
+      )}
+      {/* Turn icon and distance at bottom */}
+      {nextManeuver && (
+        <View style={styles.turnIconContainer}>
+          <Text style={styles.turnInstructionText}>
+            {nextManeuver.instruction}
+          </Text>
+          <Canvas style={styles.turnIconCanvas}>
             <Group>
-              {renderNorthArrow()}
+              {renderTurnIcon()}
             </Group>
           </Canvas>
+          <Text style={styles.turnDistanceText}>
+            {nextManeuver.distance > 0
+              ? `${Math.round(nextManeuver.distance)}m`
+              : ''}
+          </Text>
         </View>
       )}
-      <View style={styles.infoContainer}>
-        <Text style={styles.turnText}>{nextTurn}</Text>
-        <Text style={styles.distanceText}>
-          {distanceToTurn > 0
-            ? `${Math.round(distanceToTurn)}m`
-            : ''}
-        </Text>
-        {roads.length > 0 && (
-          <Text style={styles.debugText}>
-            {roads.length} roads loaded
-          </Text>
-        )}
-      </View>
     </View>
   );
 }
@@ -746,29 +865,41 @@ const styles = StyleSheet.create({
     borderWidth: theme.hudBorderWidth,
     borderColor: theme.hudBorderColor,
   },
+  layerContainer: {
+    position: 'absolute',
+    width: HUD_SIZE,
+    height: HUD_SIZE,
+    pointerEvents: 'none',
+  },
   canvas: {
     width: HUD_SIZE,
     height: HUD_SIZE,
   },
-  infoContainer: {
-    marginTop: 20,
+  turnIconContainer: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
     alignItems: 'center',
+    zIndex: 30,
   },
-  turnText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+  turnIconCanvas: {
+    width: theme.turnIconSize + 20,
+    height: theme.turnIconSize + 20,
+  },
+  turnInstructionText: {
+    color: theme.turnInstructionTextColor,
+    fontSize: theme.turnInstructionTextSize,
     fontWeight: 'bold',
+    marginBottom: 8,
     textAlign: 'center',
   },
-  distanceText: {
-    color: '#AAAAAA',
-    fontSize: 16,
-    marginTop: 4,
-  },
-  debugText: {
-    color: '#666666',
-    fontSize: 12,
+  turnDistanceText: {
+    color: theme.turnDistanceTextColor,
+    fontSize: theme.turnDistanceTextSize,
+    fontWeight: 'bold',
     marginTop: 8,
+    textAlign: 'center',
   },
   loadingText: {
     color: '#FFFFFF',

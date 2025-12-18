@@ -30,5 +30,15 @@ export interface Theme {
 
   // Background color
   backgroundColor: string;
+
+  // Turn icon styling
+  turnIconSize: number;
+  turnIconColor: string;
+  turnIconBorderColor: string;
+  turnIconBorderWidth: number;
+  turnDistanceTextColor: string;
+  turnDistanceTextSize: number;
+  turnInstructionTextColor: string;
+  turnInstructionTextSize: number;
 }
 

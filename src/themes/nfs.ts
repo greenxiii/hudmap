@@ -7,8 +7,8 @@ import {Theme} from './types';
 
 export const nfsTheme: Theme = {
   // Route styling
-  routeColor: '#2a64a4',
-  routeStrokeWidth: 10,
+  routeColor: 'rgba(42, 100, 164, .9)',
+  routeStrokeWidth: 5,
 
   // Road styling
   roadColor: '#949493',
@@ -33,5 +33,14 @@ export const nfsTheme: Theme = {
 
   // Background color
   backgroundColor: '#272b27',
-};
 
+  // Turn icon styling
+  turnIconSize: 60,
+  turnIconColor: '#FFFFFF',
+  turnIconBorderColor: '#000000',
+  turnIconBorderWidth: 2,
+  turnDistanceTextColor: '#FFFFFF',
+  turnDistanceTextSize: 18,
+  turnInstructionTextColor: '#FFFFFF',
+  turnInstructionTextSize: 16,
+};
