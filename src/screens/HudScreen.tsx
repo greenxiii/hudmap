@@ -32,9 +32,9 @@ const VIEW_RADIUS_M = 200; // 200 meter radius view - good balance between detai
 const PIXELS_PER_METER = HUD_RADIUS / VIEW_RADIUS_M;
 
 // Rotation animation settings
-const ROTATION_DURATION_MS = 25; // Animation duration - smooth interpolation between heading updates
-const HEADING_DEBOUNCE_MS = 1; // Lower = more responsive (try 0-16ms for instant, 16-50ms for smooth)
-const HEADING_CHANGE_THRESHOLD = 3; // Ignore heading changes smaller than this (degrees) - reduces unnecessary calculations
+const ROTATION_DURATION_MS = 100; // Longer duration for smoother gliding
+const HEADING_DEBOUNCE_MS = 10; // Moderate debounce to filter noise
+const HEADING_CHANGE_THRESHOLD = 2.0; // Filter out tiny tremors
 
 // Theme - can be switched to different themes
 const theme = defaultTheme;
@@ -336,16 +336,10 @@ export default function HudScreen({
     
     // Get current rotation value from ref
     let currentValue = currentRotationRef.current;
+    
+    // Calculate shortest angular distance from CURRENT actual value
+    // This avoids jumps caused by resetting the value
     let normalizedCurrent = ((currentValue % 360) + 360) % 360;
-    
-    // If value has drifted too far, reset it to normalized value to prevent accumulation
-    if (Math.abs(currentValue) > 720) {
-      rotationAnim.setValue(normalizedCurrent);
-      currentValue = normalizedCurrent;
-      currentRotationRef.current = normalizedCurrent;
-    }
-    
-    // Calculate shortest angular distance (handles 0/360 wrap-around)
     let diff = targetHeading - normalizedCurrent;
     
     // Normalize to shortest path (-180 to +180)
@@ -355,20 +349,39 @@ export default function HudScreen({
       diff += 360;
     }
     
-    // Calculate final target value (normalized current + shortest diff)
-    // This keeps the value close to 0-360 range
-    let finalTarget = normalizedCurrent + diff;
+    // Calculate final target value relative to the current accumulated value
+    let finalTarget = currentValue + diff;
 
     // Store the heading we're animating to
     lastAnimatedHeadingRef.current = targetHeading;
 
     // Animate smoothly to new heading - smooth interpolation between significant heading updates
-    Animated.timing(rotationAnim, {
-      toValue: finalTarget,
-      duration: ROTATION_DURATION_MS,
-      useNativeDriver: true, // GPU-accelerated
-      easing: Easing.linear, // Linear for smooth, consistent rotation between updates
-    }).start();
+    rotationAnim.stopAnimation((currentValue) => {
+      // Calculate shortest angular distance from where the animation actually IS right now
+      let normalizedCurrent = ((currentValue % 360) + 360) % 360;
+      let diff = targetHeading - normalizedCurrent;
+      
+      // Normalize to shortest path (-180 to +180)
+      if (diff > 180) {
+        diff -= 360;
+      } else if (diff < -180) {
+        diff += 360;
+      }
+      
+      // Calculate final target value relative to the current actual value
+      let finalTarget = currentValue + diff;
+
+      // Store the heading we're animating to
+      lastAnimatedHeadingRef.current = targetHeading;
+
+      // Animate smoothly to new heading
+      Animated.timing(rotationAnim, {
+        toValue: finalTarget,
+        duration: ROTATION_DURATION_MS,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.quad),
+      }).start();
+    });
   }, [location?.heading, rotationAnim]);
 
   // Get road style based on road type (width only, no opacity variation)
