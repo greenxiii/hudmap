@@ -6,9 +6,18 @@
 import {LatLng, RoadSegment} from '../models/types';
 import {OverpassResponse, OverpassWay} from '../models/types';
 
-const OVERPASS_API_URL = 'https://overpass-api.de/api/interpreter';
+// Multiple Overpass API endpoints for fallback
+const OVERPASS_API_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+  'https://overpass.nchc.org.tw/api/interpreter',
+];
+
 const FETCH_INTERVAL_MS = 15000; // 15 seconds
 const MIN_DISTANCE_M = 150; // 150 meters
+const MAX_RETRIES = 3; // Try up to 3 different endpoints
+const RETRY_DELAY_MS = 1000; // Initial retry delay
 
 interface CacheEntry {
   roads: RoadSegment[];
@@ -49,9 +58,8 @@ export async function fetchNearbyRoads(
   }
 
   try {
-    // Fetch with a bit more radius than requested to reduce re-fetching during small zooms
-    const fetchRadius = Math.max(radiusM, 400); 
-    const roads = await fetchRoadsFromOverpass(lat, lng, fetchRadius);
+    const fetchRadius = Math.max(radiusM, 400);
+    const roads = await fetchRoadsFromOverpassWithRetry(lat, lng, fetchRadius);
     cache = {
       roads,
       center,
@@ -60,13 +68,60 @@ export async function fetchNearbyRoads(
     };
     return roads;
   } catch (error) {
-    console.error('Error fetching roads from Overpass:', error);
-    // Return cached data if available, even if stale
+    console.error('Error fetching roads from Overpass (all endpoints failed):', error);
     if (cache) {
       return cache.roads;
     }
-    throw error;
+    return [];
   }
+}
+
+/**
+ * Fetch roads with retry logic across multiple Overpass API endpoints
+ */
+async function fetchRoadsFromOverpassWithRetry(
+  lat: number,
+  lng: number,
+  radiusM: number,
+): Promise<RoadSegment[]> {
+  let lastError: Error | null = null;
+
+  // Try each endpoint with retry logic
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const endpointIndex = attempt % OVERPASS_API_URLS.length;
+    const apiUrl = OVERPASS_API_URLS[endpointIndex];
+
+    try {
+      console.log(
+        `Attempting to fetch roads from Overpass endpoint ${endpointIndex + 1}/${OVERPASS_API_URLS.length}: ${apiUrl}`,
+      );
+      const roads = await fetchRoadsFromOverpass(lat, lng, radiusM, apiUrl);
+      console.log(`[Overpass] Endpoint ${endpointIndex + 1} returned ${roads.length} roads`);
+      if (roads.length > 0 || attempt === MAX_RETRIES - 1) {
+        // Success or last attempt (even if empty)
+        console.log(`[Overpass] Returning ${roads.length} roads from endpoint ${endpointIndex + 1}`);
+        return roads;
+      }
+      // If we got empty results but not last attempt, try next endpoint
+      console.log(`Empty results from ${apiUrl}, trying next endpoint...`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn(
+        `Overpass endpoint ${endpointIndex + 1} failed:`,
+        lastError.message,
+      );
+
+      // If not the last attempt, wait before retrying
+      if (attempt < MAX_RETRIES - 1) {
+        const delay = RETRY_DELAY_MS * Math.pow(2, attempt); // Exponential backoff
+        console.log(`Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  // All endpoints failed
+  throw lastError || new Error('All Overpass API endpoints failed');
 }
 
 /**
@@ -76,6 +131,7 @@ async function fetchRoadsFromOverpass(
   lat: number,
   lng: number,
   radiusM: number,
+  apiUrl: string = OVERPASS_API_URLS[0],
 ): Promise<RoadSegment[]> {
   // Convert radius to degrees (approximate)
   const radiusDeg = radiusM / 111000; // rough conversion
@@ -95,7 +151,7 @@ async function fetchRoadsFromOverpass(
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
   try {
-    const response = await fetch(OVERPASS_API_URL, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -112,9 +168,6 @@ async function fetchRoadsFromOverpass(
 
     const data: OverpassResponse = await response.json();
 
-    console.log(`Overpass API returned ${data.elements?.length || 0} elements`);
-
-    // Parse ways into road segments
     const roads: RoadSegment[] = data.elements
       .filter((element) => element.geometry && element.geometry.length > 1)
       .map((element) => ({
@@ -125,7 +178,6 @@ async function fetchRoadsFromOverpass(
         type: element.tags?.highway,
       }));
 
-    console.log(`Parsed ${roads.length} road segments`);
     return roads;
   } catch (error) {
     clearTimeout(timeoutId);

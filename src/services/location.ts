@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import {LocationData, LatLng} from '../models/types';
+import {PositionKalmanFilter} from '../utils/positionKalman';
 
 // Native heading module integration
 const {HeadingModule} = NativeModules;
@@ -37,6 +38,11 @@ let currentLocation: LocationData | null = null;
 let previousPosition: LatLng | null = null;
 let mockHeading: number = 0;
 let listeners: Set<(location: LocationData) => void> = new Set();
+
+// Kalman filter for position smoothing
+let positionFilter: PositionKalmanFilter | null = null;
+let lastPositionUpdateTime: number = Date.now();
+let lastFilteredPosition: LatLng | null = null;
 
 // Track last headings so we can prioritise GPS heading over compass,
 // but still allow the compass to drive rotation when GPS heading isn't updating.
@@ -105,19 +111,44 @@ export function getCurrentPosition(): Promise<LocationData> {
           heading: position.coords.heading,
           timestamp: new Date(position.timestamp).toISOString(),
         });
-        const location: LocationData = {
-          position: {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          },
-          heading: position.coords.heading ?? 0,
-          accuracy: position.coords.accuracy ?? 0,
-          timestamp: position.timestamp,
-        };
-        currentLocation = location;
-        previousPosition = location.position;
-        console.log('[Location] getCurrentPosition: Location stored in cache');
-        resolve(location);
+      const rawPosition: LatLng = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
+
+      // Initialize or update Kalman filter
+      if (!positionFilter) {
+        positionFilter = new PositionKalmanFilter(
+          rawPosition,
+          0.0001,
+          0.00001,
+          position.coords.accuracy
+            ? (position.coords.accuracy / 111000) * 0.0001
+            : 0.00005,
+        );
+        lastFilteredPosition = rawPosition;
+        lastPositionUpdateTime = Date.now();
+      } else {
+        const now = Date.now();
+        const deltaTime = (now - lastPositionUpdateTime) / 1000;
+        positionFilter.predict(deltaTime);
+        const measurementNoise = position.coords.accuracy
+          ? (position.coords.accuracy / 111000) * 0.0001
+          : 0.00005;
+        lastFilteredPosition = positionFilter.update(rawPosition, measurementNoise);
+        lastPositionUpdateTime = now;
+      }
+
+      const location: LocationData = {
+        position: lastFilteredPosition || rawPosition,
+        heading: position.coords.heading ?? 0,
+        accuracy: position.coords.accuracy ?? 0,
+        timestamp: position.timestamp,
+      };
+      currentLocation = location;
+      previousPosition = location.position; // Use filtered position
+      console.log('[Location] getCurrentPosition: Location stored in cache');
+      resolve(location);
       },
       error => {
         console.error('[Location] getCurrentPosition: ERROR', {
@@ -166,10 +197,50 @@ export function startLocationUpdates(
         timestamp: new Date(position.timestamp).toISOString(),
       });
 
-      const newPosition: LatLng = {
+      const rawPosition: LatLng = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
       };
+
+      // Initialize Kalman filter if not already initialized
+      if (!positionFilter) {
+        positionFilter = new PositionKalmanFilter(
+          rawPosition,
+          0.0001, // Initial uncertainty (~11 meters)
+          0.00001, // Process noise (position changes slowly)
+          position.coords.accuracy
+            ? (position.coords.accuracy / 111000) * 0.0001
+            : 0.00005, // Use GPS accuracy if available, otherwise default (~5.5 meters)
+        );
+        lastFilteredPosition = rawPosition;
+        lastPositionUpdateTime = Date.now();
+      } else {
+        // Predict step (position changes over time)
+        const now = Date.now();
+        const deltaTime = (now - lastPositionUpdateTime) / 1000;
+        
+        // Estimate velocity from previous filtered movement if available
+        let velocity: {lat: number; lng: number} | undefined;
+        if (lastFilteredPosition && previousPosition && deltaTime > 0) {
+          // Use filtered positions for velocity calculation
+          const latVel = (rawPosition.lat - lastFilteredPosition.lat) / deltaTime;
+          const lngVel = (rawPosition.lng - lastFilteredPosition.lng) / deltaTime;
+          velocity = {lat: latVel, lng: lngVel};
+        }
+        
+        positionFilter.predict(deltaTime, velocity);
+        lastPositionUpdateTime = now;
+
+        // Update filter with new GPS measurement
+        const measurementNoise = position.coords.accuracy
+          ? (position.coords.accuracy / 111000) * 0.0001
+          : 0.00005;
+        const filteredPosition = positionFilter.update(rawPosition, measurementNoise);
+        lastFilteredPosition = filteredPosition;
+      }
+
+      // Use filtered position for location data
+      const newPosition: LatLng = lastFilteredPosition || rawPosition;
 
       // Calculate heading from movement if available, otherwise use cached or GPS heading
       let heading = currentLocation?.heading ?? 0;
@@ -214,12 +285,13 @@ export function startLocationUpdates(
       }
 
       const location: LocationData = {
-        position: newPosition,
+        position: newPosition, // Use filtered position
         heading,
         accuracy: position.coords.accuracy ?? 0,
         timestamp: position.timestamp,
       };
 
+      // Update previousPosition to filtered position for next iteration
       previousPosition = newPosition;
       currentLocation = location;
       console.log(
@@ -316,6 +388,9 @@ export function stopLocationUpdates(): void {
   previousPosition = null;
   mockHeading = 0;
   pendingHeading = null;
+  positionFilter = null;
+  lastFilteredPosition = null;
+  lastPositionUpdateTime = Date.now();
 }
 
 /**
